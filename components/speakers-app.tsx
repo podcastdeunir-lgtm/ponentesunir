@@ -502,7 +502,7 @@ function UnresolvedTasks({setView}:{setView:(view:string)=>void}){
  return <section className="unresolved-tasks" aria-live="polite"><button className="unresolved-bell" onClick={()=>setOpen(value=>!value)} aria-expanded={open}><Bell size={17}/><span className="unresolved-count">{pending.length}</span><span>Tareas pendientes</span><ChevronRight size={16}/></button>{open&&<div className="unresolved-list">{pending.map(forum=><article key={forum.name}><div><b>Valorar a {forum.people.length} {forum.people.length===1?'ponente':'ponentes'}</b><span>{forum.name}</span></div><button onClick={()=>setView('foros')}>Abrir valoración <ArrowUpRight size={14}/></button></article>)}<p>Hay {peopleToReview} {peopleToReview===1?'intervención por revisar':'intervenciones por revisar'}.</p></div>}</section>
 }
 function NeedsFinder({people,setSelected,setView,setTag}:{people:Person[];setSelected:(p:Person)=>void;setView:(x:string)=>void;setTag:(x:string)=>void}){
- const [need,setNeed]=useState('');const [submitted,setSubmitted]=useState(false);const [forumDate,setForumDate]=useState('');
+ const [need,setNeed]=useState('');const [submitted,setSubmitted]=useState(false);const [forumDate,setForumDate]=useState('');const [country,setCountry]=useState('Todos');const [faculty,setFaculty]=useState('Todas');
  const normalize=(value:string)=>value.toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
  const topics=[
   {label:'Educación',terms:['educacion','docente','profesor','profesora','pedagog','aprendizaje','aula','didact','ensenanza','orientacion educativa','altas capacidades','comprension lectora']},
@@ -520,7 +520,10 @@ function NeedsFinder({people,setSelected,setView,setTag}:{people:Person[];setSel
  const ignoredWords=new Set(['ponente','para','foro','foros','que','con','del','las','los','una','uno','como','sobre','quiero','necesito','busco','persona','personas','profesional','especialista']);
  const tokens=normalizedNeed.split(/[^a-z0-9]+/).filter(token=>token.length>3&&!ignoredWords.has(token));
  const scheduledDate=forumDate?new Date(`${forumDate}T12:00:00`):new Date();
- const matches=people.map(person=>{
+ const countries=['Todos',...Array.from(new Set(people.map(person=>person.place))).sort((a,b)=>a.localeCompare(b,'es'))];
+ const facultyFor=(person:Person)=>{const profile=normalize(`${person.role} ${person.company} ${person.tags.join(' ')} ${person.bio}`);if(/educacion|docente|profesor|pedagog|aprendizaje|aula/.test(profile))return 'Educación';if(/salud|psicolog|psiquiatr|medic|nutric|microbiota/.test(profile))return 'Ciencias de la Salud';if(/derecho|abogad|legisl|gobierno|politica publica/.test(profile))return 'Derecho';if(/diseno|animacion|videojuegos|audiovisual|literatura|poeta|dramaturg|cine|cultura/.test(profile))return 'Artes y Ciencias Sociales';if(/tecnolog|software|cloud|datos|ciberseguridad|devops|inteligencia artificial/.test(profile))return 'Ingeniería y Tecnología';if(/empresa|negocio|emprend|marketing|finanz|innovacion/.test(profile))return 'Economía y Empresa';return 'Otras áreas'};
+ const faculties=['Todas','Educación','Ciencias de la Salud','Economía y Empresa','Ingeniería y Tecnología','Derecho','Artes y Ciencias Sociales','Otras áreas'];
+ const matches=people.filter(person=>(country==='Todos'||person.place===country)&&(faculty==='Todas'||facultyFor(person)===faculty)).map(person=>{
   const professionalProfile=normalize(`${person.role} ${person.company} ${person.bio}`);
   const topicMatches=selectedTopics.filter(topic=>topic.terms.some(term=>professionalProfile.includes(term)));
   const tokenHits=tokens.filter(token=>professionalProfile.includes(token));
@@ -535,13 +538,13 @@ function NeedsFinder({people,setSelected,setView,setTag}:{people:Person[];setSel
   const evidenceMatch=selectedTopics.length?coversAllTopics:tokenHits.length>0;
   const score=(topicMatches.length*100)+(tokenHits.length*20)+(participations.length*10)+(person.recommendation==='repetir'?15:0)-(recentForum?12:0);
   return {person,reasons,evidenceMatch,recentForum,score}
- }).filter(result=>result.evidenceMatch).sort((a,b)=>b.score-a.score||speakerScore(b.person)-speakerScore(a.person)||a.person.name.localeCompare(b.person.name,'es')).slice(0,8);
+ }).filter(result=>result.evidenceMatch).sort((a,b)=>(faculty==='Todas'?facultyFor(a.person).localeCompare(facultyFor(b.person),'es'):0)||b.score-a.score||speakerScore(b.person)-speakerScore(a.person)||a.person.name.localeCompare(b.person.name,'es')).slice(0,8);
  const primaryTopic=selectedTopics[0];
  const chooseTopic=(label:string)=>{setNeed(current=>current===label?'':label);setSubmitted(false)};
  return <section className="needs-finder">
   <div><h2>Buscar por especialidad</h2><p>Selecciona una temática o escribe una profesión, sector o necesidad concreta. Los resultados se basan en el cargo y la trayectoria profesional registrada, no en etiquetas genéricas.</p></div>
   <div className="finder-topics"><span>Temas frecuentes:</span>{topics.map(topic=><button className={selectedTopics.some(selected=>selected.label===topic.label)?'chosen':''} type="button" onClick={()=>chooseTopic(topic.label)} key={topic.label}>{topic.label}</button>)}</div>
-  <form onSubmit={event=>{event.preventDefault();setSubmitted(true)}}><input value={need} onChange={event=>{setNeed(event.target.value);setSubmitted(false)}} placeholder="Ej. Educación, cuidados de mayores o ciberseguridad"/><label className="forum-date-input">Fecha del foro (opcional)<input type="date" value={forumDate} onChange={event=>{setForumDate(event.target.value);setSubmitted(false)}}/></label><button className="new-button" type="submit"><Search size={16}/>Buscar perfiles</button></form>
+  <form onSubmit={event=>{event.preventDefault();setSubmitted(true)}}><input value={need} onChange={event=>{setNeed(event.target.value);setSubmitted(false)}} placeholder="Ej. Educación, cuidados de mayores o ciberseguridad"/><label className="forum-country-input">País<select value={country} onChange={event=>{setCountry(event.target.value);setSubmitted(false)}}>{countries.map(item=><option key={item}>{item}</option>)}</select></label><label className="forum-country-input">Facultad / área<select value={faculty} onChange={event=>{setFaculty(event.target.value);setSubmitted(false)}}>{faculties.map(item=><option key={item}>{item}</option>)}</select></label><label className="forum-date-input">Fecha del foro (opcional)<input type="date" value={forumDate} onChange={event=>{setForumDate(event.target.value);setSubmitted(false)}}/></label><button className="new-button" type="submit"><Search size={16}/>Buscar perfiles</button></form>
   {selectedTopics.length>0&&<div className="active-search-tags" aria-live="polite"><span>Especialidades:</span>{selectedTopics.map(topic=><Tag key={topic.label}>{topic.label}</Tag>)}</div>}
   {submitted&&<div className="need-results">
    <div className="need-result-head"><span>{matches.length?`${matches.length} perfiles con especialidad contrastada`:'No hay coincidencias contrastadas en cargo o trayectoria para esta búsqueda'}</span>{primaryTopic&&<button onClick={()=>{setTag(primaryTopic.label==='Inteligencia artificial'?'IA':primaryTopic.label);setView('personas')}}>Ver directorio</button>}</div>
