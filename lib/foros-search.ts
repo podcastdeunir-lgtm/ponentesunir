@@ -1,7 +1,5 @@
-/** Deterministic, local search for the UNIR forum archive.
- *
- * It intentionally separates published specialties from thematic participation:
- * a thematic match is useful for discovery, but is never presented as a credential.
+/** Deterministic, evidence-first search for the UNIR forum archive.
+ * Published specialties and contextual participation are always separated.
  */
 export type ForumSource = { id: string; title: string; date: string | null; url: string; description_full?: string; tags?: string[] };
 export type AppearanceSource = { forum_id: string; speaker_id: string; role_as_published?: string | null; bio_as_published?: string | null; explicit_specialty_sentences?: string[]; participation_role?: string | null; source_url: string };
@@ -9,63 +7,69 @@ export type SpeakerSource = { id: string; name: string; name_variants?: string[]
 export type TagSource = { id: string; label: string; lexical_pattern?: string; speaker_ids?: string[]; forum_ids?: string[] };
 
 export type SearchData = { forums: ForumSource[]; speakers: SpeakerSource[]; appearances: AppearanceSource[]; taxonomy: TagSource[] };
-export type SearchResult = { speaker_id: string; name: string; score: number; evidence_type: 'explicit_specialty' | 'thematic_participation'; reason: string; forum: { id: string; title: string; date: string | null; url: string }; excerpt: string; limitations: string[] };
-
-const synonyms: Record<string, string[]> = {
-  ia: ['inteligencia artificial', 'inteligencia artificial generativa', 'iag'],
-  inteligencia: ['ia'], gamificacion: ['juego', 'ludificacion'], aula: ['educacion', 'alumnado'],
-  podcast: ['podcast', 'podcasting', 'podcast'], ciberseguridad: ['ciberseguridad', 'ciberdefensa', 'seguridad digital'],
-  pantallas: ['digital', 'moviles', 'redes'], microbiota: ['nutricion', 'alimentacion'],
-  liderazgo: ['lideres', 'equipos', 'bienestar'], geopolitica: ['seguridad internacional'],
-  animacion: ['3d', 'diseno'], diseno: ['animacion'],
+export type SearchResult = {
+  speaker_id: string; name: string; score: number; evidence_type: 'explicit_specialty' | 'thematic_participation';
+  reason: string; excerpt: string; matched_concepts: string[]; matched_tags: string[];
+  forum: { id: string; title: string; date: string | null; url: string }; limitations: string[];
 };
 
-export function normalize(value = ''): string {
-  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, ' ');
-}
+type Concept = { label: string; phrases: string[] };
+const ignoredWords = new Set(['a','al','de','del','el','en','es','experto','experta','foros','foro','la','las','lo','los','para','ponente','ponentes','que','quiero','sobre','un','una','y','ya','haya','han','participado','aplicada','aplicado','aplicar','tema','temas','gestion']);
+const concepts: Concept[] = [
+  { label: 'Inteligencia artificial', phrases: ['inteligencia artificial', 'ia generativa', 'inteligencia generativa', 'iag', 'ia'] },
+  { label: 'Gestión pública', phrases: ['gestion publica', 'administracion publica', 'sector publico', 'politica publica', 'gobierno abierto', 'gobernanza', 'empleo publico', 'contratacion publica', 'estado abierto'] },
+  { label: 'Literatura', phrases: ['literatura', 'literario', 'escritor', 'escritora', 'poesia', 'poeta', 'dramaturgia', 'dramaturgo', 'novela', 'editorial'] },
+  { label: 'Cultura', phrases: ['cultura', 'cultural', 'patrimonio', 'humanidades', 'cine', 'musica', 'audiovisual'] },
+  { label: 'Educación', phrases: ['educacion', 'docencia', 'docente', 'pedagogia', 'aprendizaje', 'aula', 'alumnado'] },
+  { label: 'Salud', phrases: ['salud', 'sanitario', 'medicina', 'psicologia', 'psiquiatria', 'nutricion', 'microbiota'] },
+  { label: 'Ciberseguridad', phrases: ['ciberseguridad', 'ciberdefensa', 'seguridad digital', 'seguridad de la informacion'] },
+  { label: 'Empresa e innovación', phrases: ['empresa', 'empresas', 'negocio', 'innovacion', 'emprendimiento', 'liderazgo'] },
+];
 
-function queryTerms(query: string) {
-  const initial = normalize(query).split(' ').filter(x => x.length > 1);
-  return [...new Set(initial.flatMap(term => [term, ...(synonyms[term] ?? []).flatMap(normalize)]))];
+export function normalize(value = ''): string {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, ' ');
 }
-function overlap(terms: string[], text: string) { const normalized = normalize(text); return terms.filter(t => normalized.includes(t)).length; }
-function snippet(text: string, terms: string[]) {
-  const plain = text.replace(/\s+/g, ' ').trim(); const hit = terms.map(t => normalize(plain).indexOf(t)).find(i => i >= 0) ?? 0;
-  return plain.slice(Math.max(0, hit - 80), hit + 240).trim();
+function includesPhrase(text: string, phrase: string) { return ` ${normalize(text)} `.includes(` ${phrase} `); }
+function queryConcepts(query: string): Concept[] {
+  const normalized = normalize(query);
+  const matched = concepts.filter(concept => concept.phrases.some(phrase => includesPhrase(normalized, phrase)));
+  if (matched.length) return matched;
+  return normalized.split(' ').filter(term => term.length > 2 && !ignoredWords.has(term)).map(term => ({ label: term, phrases: [term] }));
+}
+function matchedPhrases(text: string, concept: Concept) { return concept.phrases.filter(phrase => includesPhrase(text, phrase)); }
+function snippet(text: string, phrases: string[]) {
+  const plain = text.replace(/\s+/g, ' ').trim(); const hit = phrases.map(phrase => normalize(plain).indexOf(phrase)).find(index => index >= 0) ?? 0;
+  return plain.slice(Math.max(0, hit - 80), hit + 260).trim();
 }
 
 export function searchForos(query: string, data: SearchData, limit = 12): SearchResult[] {
-  const directTerms = normalize(query).split(' ').filter(x => x.length > 1);
-  const terms = queryTerms(query); if (!terms.length) return [];
-  const forums = new Map(data.forums.map(f => [f.id, f]));
-  const tagById = new Map(data.taxonomy.map(t => [t.id, t]));
+  const requested = queryConcepts(query); if (!requested.length) return [];
+  const forums = new Map(data.forums.map(forum => [forum.id, forum]));
+  const tagById = new Map(data.taxonomy.map(tag => [tag.id, tag]));
   const results: SearchResult[] = [];
   for (const speaker of data.speakers) {
-    const specialties = speaker.explicit_specialties ?? [];
-    // A broad synonym (for example, "educación" expanded from "aula") can
-    // discover a forum, but cannot by itself turn an unrelated profile into an
-    // explicitly qualified specialist. Direct evidence uses the literal terms.
-    const direct = specialties.map(s => ({ value: s, hits: overlap(directTerms, s) })).sort((a, b) => b.hits - a.hits)[0];
-    const appearances = data.appearances.filter(a => a.speaker_id === speaker.id);
-    const thematic = appearances.map(a => {
-      const forum = forums.get(a.forum_id); if (!forum) return null;
-      const tagText = (forum.tags ?? []).map(id => tagById.get(id)?.label ?? '').join(' ');
-      const text = [forum.title, forum.description_full, a.bio_as_published, tagText].filter(Boolean).join(' ');
-      return { a, forum, text, hits: overlap(terms, text) };
-    }).filter(Boolean).sort((a: any, b: any) => b.hits - a.hits)[0] as any;
-    if ((!direct || direct.hits === 0) && (!thematic || thematic.hits === 0)) continue;
-    const isDirect = Boolean(direct?.hits && (!thematic || direct.hits * 5 >= thematic.hits * 4));
-    const chosen = thematic;
+    const candidates = data.appearances.filter(appearance => appearance.speaker_id === speaker.id).map(appearance => {
+      const forum = forums.get(appearance.forum_id); if (!forum) return null;
+      const tags = (forum.tags ?? []).map(id => tagById.get(id)).filter((tag): tag is TagSource => Boolean(tag));
+      const text = [forum.title, forum.description_full, appearance.role_as_published, appearance.bio_as_published, tags.map(tag => tag.label).join(' ')].filter(Boolean).join(' ');
+      const matches = requested.map(concept => ({ concept, phrases: matchedPhrases(text, concept) }));
+      // A combined brief (for example, IA + gestión pública) must be evidenced for every requested subject.
+      if (matches.some(match => match.phrases.length === 0)) return null;
+      const specialtyText = (speaker.explicit_specialties ?? []).join(' ');
+      return { forum, tags, text, matches, specialtyText, direct: requested.every(concept => matchedPhrases(specialtyText, concept).length > 0) };
+    }).filter(Boolean) as Array<{ forum: ForumSource; tags: TagSource[]; text: string; matches: Array<{ concept: Concept; phrases: string[] }>; specialtyText: string; direct: boolean }>;
+    const chosen = candidates.sort((a, b) => ((b.direct ? 100 : 0) + b.matches.flatMap(match => match.phrases).length) - ((a.direct ? 100 : 0) + a.matches.flatMap(match => match.phrases).length))[0];
     if (!chosen) continue;
-    const type = isDirect ? 'explicit_specialty' : 'thematic_participation';
-    const excerpt = isDirect ? direct.value : snippet(chosen.text, terms);
+    const matchedConcepts = chosen.matches.map(match => match.concept.label);
+    const allPhrases = chosen.matches.flatMap(match => match.phrases);
+    const evidenceType = chosen.direct ? 'explicit_specialty' : 'thematic_participation';
     results.push({
-      speaker_id: speaker.id, name: speaker.name, score: (isDirect ? 100 : 40) + (direct?.hits ?? 0) * 10 + chosen.hits * 4,
-      evidence_type: type,
-      reason: isDirect ? `Especialidad publicada: ${direct.value}` : `Participó en el foro «${chosen.forum.title}», relacionado con la consulta.`,
-      forum: { id: chosen.forum.id, title: chosen.forum.title, date: chosen.forum.date, url: chosen.forum.url }, excerpt,
-      limitations: type === 'thematic_participation' ? ['La participación temática no acredita por sí sola una especialidad.'] : [],
+      speaker_id: speaker.id, name: speaker.name, score: (chosen.direct ? 100 : 40) + allPhrases.length * 10, evidence_type: evidenceType,
+      reason: chosen.direct ? `Especialidad publicada que cubre: ${matchedConcepts.join(' + ')}.` : `Participó en «${chosen.forum.title}», con evidencia para: ${matchedConcepts.join(' + ')}.`,
+      excerpt: chosen.direct ? chosen.specialtyText : snippet(chosen.text, allPhrases), matched_concepts: matchedConcepts,
+      matched_tags: chosen.tags.map(tag => tag.label).filter(label => requested.some(concept => concept.phrases.some(phrase => includesPhrase(label, phrase)))),
+      forum: { id: chosen.forum.id, title: chosen.forum.title, date: chosen.forum.date, url: chosen.forum.url },
+      limitations: evidenceType === 'thematic_participation' ? ['La participación temática no acredita por sí sola una especialidad.'] : [],
     });
   }
   return results.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'es')).slice(0, limit);
