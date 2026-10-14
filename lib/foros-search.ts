@@ -13,30 +13,69 @@ export type SearchResult = {
   forum: { id: string; title: string; date: string | null; url: string }; limitations: string[];
 };
 
-type Concept = { label: string; phrases: string[] };
+export type ForumConcept = { label: string; phrases: string[] };
 const ignoredWords = new Set(['a','al','de','del','el','en','es','experto','experta','foros','foro','la','las','lo','los','para','ponente','ponentes','que','quiero','sobre','un','una','y','ya','haya','han','participado','aplicada','aplicado','aplicar','tema','temas','gestion']);
-const concepts: Concept[] = [
-  { label: 'Inteligencia artificial', phrases: ['inteligencia artificial', 'ia generativa', 'inteligencia generativa', 'iag', 'ia'] },
+const concepts: ForumConcept[] = [
+  { label: 'Inteligencia artificial', phrases: ['inteligencia artificial', 'ia generativa', 'inteligencia generativa', 'iag', 'ia', 'prompts', 'automatizacion', 'agentes de ia'] },
+  { label: 'Tecnología digital', phrases: ['tecnologia', 'tecnologico', 'transformacion digital', 'desarrollo de software', 'software', 'iot', 'industria digital'] },
   { label: 'Gestión pública', phrases: ['gestion publica', 'administracion publica', 'sector publico', 'politica publica', 'gobierno abierto', 'gobernanza', 'empleo publico', 'contratacion publica', 'estado abierto'] },
   { label: 'Literatura', phrases: ['literatura', 'literario', 'escritor', 'escritora', 'poesia', 'poeta', 'dramaturgia', 'dramaturgo', 'novela', 'editorial'] },
   { label: 'Cultura', phrases: ['cultura', 'cultural', 'patrimonio', 'humanidades', 'cine', 'musica', 'audiovisual'] },
-  { label: 'Educación', phrases: ['educacion', 'docencia', 'docente', 'pedagogia', 'aprendizaje', 'aula', 'alumnado'] },
-  { label: 'Salud', phrases: ['salud', 'sanitario', 'medicina', 'psicologia', 'psiquiatria', 'nutricion', 'microbiota'] },
+  { label: 'Educación', phrases: ['educacion', 'docencia', 'docente', 'pedagogia', 'aprendizaje', 'aula', 'alumnado', 'gamificacion', 'inclusion', 'altas capacidades', 'acoso escolar', 'oposiciones', 'formacion profesional'] },
+  { label: 'Salud', phrases: ['salud', 'sanitario', 'medicina', 'psicologia', 'psiquiatria', 'nutricion', 'microbiota', 'salud mental', 'dependencia', 'trastornos alimentarios', 'cancer infantil'] },
   { label: 'Ciberseguridad', phrases: ['ciberseguridad', 'ciberdefensa', 'seguridad digital', 'seguridad de la informacion'] },
-  { label: 'Empresa e innovación', phrases: ['empresa', 'empresas', 'negocio', 'innovacion', 'emprendimiento', 'liderazgo'] },
+  { label: 'Empresa e innovación', phrases: ['empresa', 'empresas', 'negocio', 'innovacion', 'emprendimiento', 'liderazgo', 'logistica', 'empleo', 'competencias'] },
+  { label: 'Deporte', phrases: ['deporte', 'deportivo', 'rendimiento', 'esports', 'e sports', 'gaming'] },
+  { label: 'Comunicación', phrases: ['comunicacion', 'marketing', 'podcast', 'periodismo', 'oratoria', 'storytelling', 'seo', 'ventas'] },
+  { label: 'Diseño y creatividad', phrases: ['diseno', 'creatividad', 'animacion', '3d', 'interiorismo'] },
+  { label: 'Sociedad, derecho y seguridad', phrases: ['criminologia', 'geopolitica', 'seguridad internacional', 'fiscalidad', 'regulacion', 'trabajo social', 'justicia'] },
+  { label: 'Sostenibilidad', phrases: ['sostenibilidad', 'clima', 'medio ambiente'] },
 ];
 
 export function normalize(value = ''): string {
   return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, ' ');
 }
 function includesPhrase(text: string, phrase: string) { return ` ${normalize(text)} `.includes(` ${phrase} `); }
-function queryConcepts(query: string): Concept[] {
+function editDistance(left: string, right: string): number {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1] + 1,
+        previous[rightIndex] + 1,
+        previous[rightIndex - 1] + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+      );
+    }
+    previous.splice(0, previous.length, ...current);
+  }
+  return previous[right.length];
+}
+
+function isTypoOf(token: string, word: string): boolean {
+  if (token.length < 5 || word.length < 5) return false;
+  const maximumDistance = Math.max(token.length, word.length) >= 9 ? 3 : 2;
+  return Math.abs(token.length - word.length) <= maximumDistance && editDistance(token, word) <= maximumDistance;
+}
+
+/** Maps wording and common misspellings to the closed forum taxonomy.
+ * It is deliberately local and deterministic, so the directory still works
+ * when the optional AI interpretation service is unavailable. */
+export function inferForumConcepts(query: string): ForumConcept[] {
   const normalized = normalize(query);
-  const matched = concepts.filter(concept => concept.phrases.some(phrase => includesPhrase(normalized, phrase)));
+  const tokens = normalized.split(' ').filter(Boolean);
+  return concepts.filter(concept => concept.phrases.some(phrase => {
+    if (includesPhrase(normalized, phrase)) return true;
+    return phrase.split(' ').some(word => tokens.some(token => isTypoOf(token, word)));
+  }));
+}
+function queryConcepts(query: string): ForumConcept[] {
+  const normalized = normalize(query);
+  const matched = inferForumConcepts(normalized);
   if (matched.length) return matched;
   return normalized.split(' ').filter(term => term.length > 2 && !ignoredWords.has(term)).map(term => ({ label: term, phrases: [term] }));
 }
-function matchedPhrases(text: string, concept: Concept) { return concept.phrases.filter(phrase => includesPhrase(text, phrase)); }
+function matchedPhrases(text: string, concept: ForumConcept) { return concept.phrases.filter(phrase => includesPhrase(text, phrase)); }
 function snippet(text: string, phrases: string[]) {
   const plain = text.replace(/\s+/g, ' ').trim(); const hit = phrases.map(phrase => normalize(plain).indexOf(phrase)).find(index => index >= 0) ?? 0;
   return plain.slice(Math.max(0, hit - 80), hit + 260).trim();
@@ -57,7 +96,7 @@ export function searchForos(query: string, data: SearchData, limit = 12): Search
       if (matches.some(match => match.phrases.length === 0)) return null;
       const specialtyText = (speaker.explicit_specialties ?? []).join(' ');
       return { forum, tags, text, matches, specialtyText, direct: requested.every(concept => matchedPhrases(specialtyText, concept).length > 0) };
-    }).filter(Boolean) as Array<{ forum: ForumSource; tags: TagSource[]; text: string; matches: Array<{ concept: Concept; phrases: string[] }>; specialtyText: string; direct: boolean }>;
+    }).filter(Boolean) as Array<{ forum: ForumSource; tags: TagSource[]; text: string; matches: Array<{ concept: ForumConcept; phrases: string[] }>; specialtyText: string; direct: boolean }>;
     const chosen = candidates.sort((a, b) => ((b.direct ? 100 : 0) + b.matches.flatMap(match => match.phrases).length) - ((a.direct ? 100 : 0) + a.matches.flatMap(match => match.phrases).length))[0];
     if (!chosen) continue;
     const matchedConcepts = chosen.matches.map(match => match.concept.label);
