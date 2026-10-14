@@ -1,0 +1,37 @@
+{
+  "source_file_sha256": "e4a9f616f2e7ef5916fed07979056a5a22af2fbd6195cd92ad916acd4bd647d0",
+  "source_schema_version": "1.0",
+  "counts": {
+    "forums": 127,
+    "speakers": 364,
+    "appearances": 417,
+    "unique_appearance_rows": 417,
+    "areas": 16,
+    "taxonomy": 44,
+    "evaluation_intents": 44
+  },
+  "known_gaps": [
+    {
+      "forum_id": "foro_c858bd49d24b",
+      "url": "https://www.unir.net/evento/foros/foro-docentes-secundaria/",
+      "field": "faculty"
+    }
+  ],
+  "possible_aliases_not_merged": [
+    {
+      "name_a": "Andrea Robles",
+      "name_b": "Andrea Robles González",
+      "status": "posible variante no fusionada: las fichas publican cargos diferentes y no permiten confirmar identidad"
+    },
+    {
+      "name_a": "Mari Paz Santos",
+      "name_b": "Mari Paz Santos Zúñiga",
+      "status": "posible variante no fusionada: el nombre abreviado no permite confirmar identidad"
+    }
+  ],
+  "import_key": {
+    "forums": "id",
+    "speakers": "id",
+    "appearances": "forum_id + speaker_id + name_as_published"
+  }
+}
