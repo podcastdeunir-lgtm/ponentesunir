@@ -15,9 +15,12 @@ const storageKey = 'unir-ponentes:forum-shortlist:v1';
 export function ForumPlanner() {
   const [value, setValue] = useState('');
   const [submitted, setSubmitted] = useState('');
+  const [requested, setRequested] = useState('');
   const [results, setResults] = useState<Result[]>([]);
   const [shortlist, setShortlist] = useState<Result[]>([]);
   const [status, setStatus] = useState('');
+  const [aiConcepts, setAiConcepts] = useState<string[]>([]);
+  const [aiNote, setAiNote] = useState('');
 
   useEffect(() => {
     try { const saved = JSON.parse(window.localStorage.getItem(storageKey) || '[]'); if (Array.isArray(saved)) setShortlist(saved); } catch { /* Optional session convenience. */ }
@@ -39,7 +42,21 @@ export function ForumPlanner() {
   }, [submitted]);
 
   const selectedIds = useMemo(() => new Set(shortlist.map(person => person.speaker_id)), [shortlist]);
-  const search = (term: string) => { const clean = term.trim(); if (clean) { setValue(clean); setSubmitted(clean); } };
+  const search = async (term: string) => {
+    const clean = term.trim(); if (!clean) return;
+    setValue(clean); setRequested(clean); setResults([]); setAiConcepts([]); setAiNote(''); setStatus('Interpretando el encargo…');
+    try {
+      const response = await fetch('/api/foros/interpret', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: clean }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error('No se pudo interpretar la consulta.');
+      setAiConcepts(Array.isArray(data.concepts) ? data.concepts : []);
+      setAiNote(data.used_ai ? (data.clarification || 'Consulta interpretada con IA antes de contrastarla con el archivo.') : (data.note || 'Consulta enviada directamente al archivo verificado.'));
+      setSubmitted(typeof data.normalized_query === 'string' && data.normalized_query.trim() ? data.normalized_query : clean);
+    } catch {
+      setAiNote('No se pudo interpretar la consulta con IA; se ha usado la búsqueda verificada.');
+      setSubmitted(clean);
+    }
+  };
   const toggle = (result: Result) => setShortlist(current => current.some(item => item.speaker_id === result.speaker_id) ? current.filter(item => item.speaker_id !== result.speaker_id) : [...current, result]);
   const downloadBrief = () => {
     const lines = ['# Propuesta de ponentes · Foro UNIR', '', `Búsqueda: ${submitted || 'Sin consulta'}`, `Generado: ${new Date().toLocaleDateString('es-ES')}`, '', ...shortlist.flatMap((person, index) => [
@@ -68,7 +85,7 @@ export function ForumPlanner() {
     </div>
     <div className="forum-planner-layout">
       <div className="forum-planner-results" aria-live="polite">
-        {submitted && <div className="planner-result-title"><div><p>ENCARGO</p><h3>«{submitted}»</h3><span>{status || `${results.length} perfiles con evidencia suficiente.`}</span></div><span className="planner-rule">En búsquedas combinadas, todos los temas deben aparecer en la evidencia.</span></div>}
+        {submitted && <div className="planner-result-title"><div><p>ENCARGO</p><h3>«{requested || submitted}»</h3><span>{status || `${results.length} perfiles con evidencia suficiente.`}</span>{aiNote&&<small className="planner-ai-note">{aiConcepts.length ? `IA interpretó: ${aiConcepts.join(' + ')}. ` : ''}{aiNote}</small>}</div><span className="planner-rule">En búsquedas combinadas, todos los temas deben aparecer en la evidencia.</span></div>}
         {submitted && !results.length && !status && <p className="empty">No hay perfiles acreditados para este encargo. Prueba con un tema más amplio o revisa el archivo de foros.</p>}
         {results.map(result => <article className="planner-result" key={`${result.speaker_id}:${result.forum.id}`}>
           <div className="planner-result-head"><div><span className={`evidence-pill ${result.evidence_type}`}>{result.evidence_type === 'explicit_specialty' ? 'Especialidad publicada' : 'Participación temática'}</span><h3>{result.name}</h3></div><button className={selectedIds.has(result.speaker_id) ? 'planner-added' : ''} onClick={() => toggle(result)}>{selectedIds.has(result.speaker_id) ? 'En selección' : <><UserPlus size={15} />Añadir</>}</button></div>
